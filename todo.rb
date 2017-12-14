@@ -44,12 +44,8 @@ helpers do
   end
 end
 
-before do
-  session[:lists] ||= []
-end
-
 def error_for_list_name(list_name)
-  if session[:lists].any? { |list| list[:name] == list_name }
+  if @storage.all_lists.any? { |list| list[:name] == list_name }
     "List name must be unique."
   elsif !(1..100).cover?(list_name.size)
     "List name must be between 1 and 100 characters long."
@@ -57,7 +53,7 @@ def error_for_list_name(list_name)
 end
 
 def error_for_todo_name(todo_name, list_id)
-  list = load_list(list_id)
+  list = @storage.load_list(list_id)
   if list[:todos].any? { |todo| todo[:name] == todo_name }
     "Todo name must be unique."
   elsif !(1..100).cover?(todo_name.size)
@@ -65,17 +61,8 @@ def error_for_todo_name(todo_name, list_id)
   end
 end
 
-def load_list(list_id)
-  list = session[:lists].find { |list| list[:id] == list_id }
-  return list if list
-
-  session[:error] = "List not found."
-  redirect "/lists"
-end
-
-def next_id(array)
-  max = array.map { |item| item[:id] }.max || 0
-  max + 1
+before do
+  @storage = SessionPersistence.new(session)
 end
 
 get "/" do
@@ -84,7 +71,7 @@ end
 
 # displays a list of todo lists
 get "/lists" do
-  @lists = session[:lists]
+  @lists = @storage.all_lists
   erb :lists, layout: :layout
 end
 
@@ -102,8 +89,7 @@ post "/lists" do
     session[:error] = error
     erb :new_list, layout: :layout
   else
-    id = next_id(session[:lists])
-    session[:lists] << { id: id, name: list_name, todos: [] }
+    @storage.create_new_list(list_name)
     session[:success] = "New Todo list successfully added!"
     redirect "/lists"
   end
@@ -112,22 +98,33 @@ end
 # displays a single todo list
 get "/lists/:id" do
   @list_id = params[:id].to_i
-  @list = load_list(@list_id)
+  @list = @storage.load_list(@list_id)
   @todos = @list[:todos]
-  erb :list, layout: :layout
+
+  if @list
+    erb :list, layout: :layout
+  else
+    session[:error] = "List not found."
+    redirect "/lists"
+  end
 end
 
 # edit an existing todo list
 get "/lists/:id/edit" do
   @list_id = params[:id].to_i
-  @list = load_list(@list_id)
-  erb :edit_list, layout: :layout
+  @list = @storage.load_list(@list_id)
+
+  if @list
+    erb :edit_list, layout: :layout
+  else
+    session[:error] = "List not found."
+    redirect "/lists"
+  end
 end
 
 # updates an existing todo list
 post "/lists/:id" do
   @list_id = params[:id].to_i
-  @list = load_list(@list_id)
   new_list_name = params[:list_name]
 
   error = error_for_list_name(new_list_name)
@@ -135,7 +132,7 @@ post "/lists/:id" do
     session[:error] = error
     erb :edit_list, layout: :layout
   else
-    @list[:name] = new_list_name
+    @storage.edit_list_name(@list_id, new_list_name)
     session[:success] = "Todo list successfully updated!"
     redirect "/lists/#{@list_id}"
   end
@@ -144,7 +141,7 @@ end
 # deletes an existing todo list
 post "/lists/:id/delete" do
   id = params[:id].to_i
-  session[:lists].reject! { |list| list[:id] == id }
+  @storage.delete_list(id)
 
   if env["HTTP_X_REQUESTED_WITH"] == "XMLHttpRequest"
     "/lists"
@@ -157,17 +154,14 @@ end
 # adds a new todo item to a todo list
 post "/lists/:list_id/todos" do
   @list_id = params[:list_id].to_i
-  @list = load_list(@list_id)
   todo_name = params[:todo].strip
 
   error = error_for_todo_name(todo_name, @list_id)
   if error
-    @todos = @list[:todos]
     session[:error] = error
     erb :list, layout: :layout
   else
-    id = next_id(@list[:todos])
-    @list[:todos] << { id: id, name: todo_name, completed: false }
+    @storage.create_new_todo(@list_id, todo_name)
     session[:success] = "Todo item successfully added!"
     redirect "lists/#{@list_id}"
   end
@@ -177,8 +171,7 @@ end
 post "/lists/:list_id/todos/:todo_id/delete" do
   list_id = params[:list_id].to_i
   todo_id = params[:todo_id].to_i
-  @list = load_list(list_id)
-  @list[:todos].reject! { |todo| todo[:id] == todo_id }
+  @storage.delete_todo(list_id, todo_id)
 
   if env["HTTP_X_REQUESTED_WITH"] == "XMLHttpRequest"
     status 204
@@ -191,19 +184,84 @@ end
 # marks all todo items in a list as done
 post "/lists/:id/complete_all" do
   list_id = params[:id].to_i
-  list = load_list(list_id)
-  todos = list[:todos]
-  todos.each { |todo| todo[:completed] = true }
+  @storage.mark_all_todos_done(list_id)
   redirect "/lists/#{list_id}"
 end
 
-# marks a todo item as done
+# updates a todo's status
 post "/lists/:list_id/todos/:todo_id" do
   list_id = params[:list_id].to_i
   todo_id = params[:todo_id].to_i
-  list = load_list(list_id)
-  todos = list[:todos]
-  todo = todos.find { |todo| todo[:id] == todo_id }
-  todo[:completed] = (params[:completed] == 'true' ? true : false)
+  new_status = (params[:completed] == 'true' ? true : false)
+  @storage.update_todo_status(list_id, todo_id, new_status)
   redirect "/lists/#{list_id}"
+end
+
+class SessionPersistence
+  attr_reader :session
+
+  def initialize(session)
+    @session = session
+    @session[:lists] ||= []
+  end
+
+  def load_list(list_id)
+    session[:lists].find { |list| list[:id] == list_id }
+  end
+
+  def all_lists
+    session[:lists]
+  end
+
+  def create_new_list(list_name)
+    id = next_id(all_lists)
+    session[:lists] << { id: id, name: list_name, todos: [] }
+  end
+
+  def delete_list(list_id)
+    session[:lists].reject! { |list| list[:id] == id }
+  end
+
+  def edit_list_name(list_id, new_list_name)
+    list = load_list(list_id)
+    list[:name] = new_list_name
+  end
+
+  def create_new_todo(list_id, todo_name)
+    todo_id = next_id(@todos)
+    list = load_list(list_id)
+    list[:todos] << { id: todo_id, name: todo_name, completed: false }
+  end
+
+  def delete_todo(list_id, todo_id)
+    list = load_list(list_id)
+    list[:todos].reject! { |todo| todo[:id] == todo_id }
+  end
+
+  def mark_all_todos_done(list_id)
+    todos = find_todos_by(list_id)
+    todos.each { |todo| todo[:completed] = true }
+  end
+
+  def update_todo_status(list_id, todo_id, new_status)
+    todos = find_todos_by(list_id)
+    todo = find_todo(todo_id, todos)
+    todo[:completed] = new_status
+  end
+
+  private
+
+  def find_todos_by(list_id)
+    list = load_list(list_id)
+    list[:todos]
+  end
+
+  def find_todo(todo_id, todos)
+    todos.find { |todo| todo[:id] == todo_id }
+  end
+
+  def next_id(array)
+    max = array.map { |item| item[:id] }.max || 0
+    max + 1
+  end
 end
