@@ -6,13 +6,16 @@ class DatabasePersistence
   attr_reader :db, :logger
 
   def initialize(logger)
-    @db = PG.connect(dbname: 'todos')
+    @db = if Sinatra::Base.production?
+            PG.connect(ENV['DATABASE_URL'])
+          else
+            PG.connect(dbname: "todos")
+          end
     @logger = logger
   end
 
-  def query(statement, *params)
-    logger.info "#{statement}: #{params}"
-    db.exec_params(statement, params)
+  def disconnect
+    @db.close
   end
 
   def load_list(list_id)
@@ -79,6 +82,11 @@ class DatabasePersistence
   end
 
   private
+
+  def query(statement, *params)
+    logger.info "#{statement}: #{params}"
+    db.exec_params(statement, params)
+  end
 
   def load_todos_by(list_id)
     sql = "SELECT * FROM todos WHERE list_id = $1"

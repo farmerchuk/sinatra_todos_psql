@@ -15,6 +15,10 @@ configure(:development) do
   also_reload "database_persistence.rb"
 end
 
+after do
+  @storage.disconnect
+end
+
 helpers do
   def completed_todos(list)
     todos = list[:todos]
