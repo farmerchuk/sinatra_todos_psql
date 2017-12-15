@@ -1,12 +1,18 @@
 require "sinatra"
-require "sinatra/reloader" if development?
 require "sinatra/content_for"
 require "tilt/erubis"
+
+require_relative "lib/database_persistence"
 
 configure do
   set :erb, :escape_html => true
   enable :sessions
   set :session_secret, "secret"
+end
+
+configure(:development) do
+  require "sinatra/reloader"
+  also_reload "database_persistence.rb"
 end
 
 helpers do
@@ -62,7 +68,7 @@ def error_for_todo_name(todo_name, list_id)
 end
 
 before do
-  @storage = SessionPersistence.new(session)
+  @storage = DatabasePersistence.new(logger)
 end
 
 get "/" do
@@ -99,9 +105,9 @@ end
 get "/lists/:id" do
   @list_id = params[:id].to_i
   @list = @storage.load_list(@list_id)
-  @todos = @list[:todos]
 
-  if @list
+  unless @list.empty?
+    @todos = @list[:todos]
     erb :list, layout: :layout
   else
     session[:error] = "List not found."
@@ -114,7 +120,7 @@ get "/lists/:id/edit" do
   @list_id = params[:id].to_i
   @list = @storage.load_list(@list_id)
 
-  if @list
+  unless @list.empty?
     erb :edit_list, layout: :layout
   else
     session[:error] = "List not found."
@@ -132,7 +138,7 @@ post "/lists/:id" do
     session[:error] = error
     erb :edit_list, layout: :layout
   else
-    @storage.edit_list_name(@list_id, new_list_name)
+    @storage.update_list_name(@list_id, new_list_name)
     session[:success] = "Todo list successfully updated!"
     redirect "/lists/#{@list_id}"
   end
@@ -195,73 +201,4 @@ post "/lists/:list_id/todos/:todo_id" do
   new_status = (params[:completed] == 'true' ? true : false)
   @storage.update_todo_status(list_id, todo_id, new_status)
   redirect "/lists/#{list_id}"
-end
-
-class SessionPersistence
-  attr_reader :session
-
-  def initialize(session)
-    @session = session
-    @session[:lists] ||= []
-  end
-
-  def load_list(list_id)
-    session[:lists].find { |list| list[:id] == list_id }
-  end
-
-  def all_lists
-    session[:lists]
-  end
-
-  def create_new_list(list_name)
-    id = next_id(all_lists)
-    session[:lists] << { id: id, name: list_name, todos: [] }
-  end
-
-  def delete_list(list_id)
-    session[:lists].reject! { |list| list[:id] == id }
-  end
-
-  def edit_list_name(list_id, new_list_name)
-    list = load_list(list_id)
-    list[:name] = new_list_name
-  end
-
-  def create_new_todo(list_id, todo_name)
-    todo_id = next_id(@todos)
-    list = load_list(list_id)
-    list[:todos] << { id: todo_id, name: todo_name, completed: false }
-  end
-
-  def delete_todo(list_id, todo_id)
-    list = load_list(list_id)
-    list[:todos].reject! { |todo| todo[:id] == todo_id }
-  end
-
-  def mark_all_todos_done(list_id)
-    todos = find_todos_by(list_id)
-    todos.each { |todo| todo[:completed] = true }
-  end
-
-  def update_todo_status(list_id, todo_id, new_status)
-    todos = find_todos_by(list_id)
-    todo = find_todo(todo_id, todos)
-    todo[:completed] = new_status
-  end
-
-  private
-
-  def find_todos_by(list_id)
-    list = load_list(list_id)
-    list[:todos]
-  end
-
-  def find_todo(todo_id, todos)
-    todos.find { |todo| todo[:id] == todo_id }
-  end
-
-  def next_id(array)
-    max = array.map { |item| item[:id] }.max || 0
-    max + 1
-  end
 end
