@@ -1,6 +1,6 @@
 # database_persistence.rb
 
-require 'pg'
+require "pg"
 
 class DatabasePersistence
   attr_reader :db, :logger
@@ -19,27 +19,37 @@ class DatabasePersistence
   end
 
   def load_list(list_id)
-    sql = "SELECT * FROM lists WHERE id = $1"
-    result = query(sql, list_id)
-    tuple = result.first
+    sql = <<~SQL
+      SELECT
+        lists.*,
+        COUNT(todos.id) AS todos_count,
+        COUNT(NULLIF(todos.completed, false)) AS todos_completed_count
+      FROM lists
+      LEFT OUTER JOIN todos ON lists.id = todos.list_id
+      WHERE lists.id = $1
+      GROUP BY lists.id
+      ORDER BY lists.name;
+    SQL
 
-    if tuple
-      todos = load_todos_by(list_id)
-      { id: tuple['id'].to_i, name: tuple['name'], todos: todos }
-    else
-      {}
-    end
+    result = query(sql, list_id).first
+    convert_tuple_to_hash(result)
   end
 
   def all_lists
-    sql = "SELECT * FROM lists"
+    sql = <<~SQL
+      SELECT
+        lists.*,
+        COUNT(todos.id) AS todos_count,
+        COUNT(NULLIF(todos.completed, false)) AS todos_completed_count
+      FROM lists
+      LEFT OUTER JOIN todos ON lists.id = todos.list_id
+      GROUP BY lists.id
+      ORDER BY lists.name;
+    SQL
+
     result = query(sql)
-
     result.map do |tuple|
-      list_id = tuple['id'].to_i
-      todos = load_todos_by(list_id)
-
-      {id: list_id, name: tuple['name'], todos: todos}
+      convert_tuple_to_hash(tuple)
     end
   end
 
@@ -49,16 +59,27 @@ class DatabasePersistence
   end
 
   def delete_list(list_id)
-    list_sql = "DELETE FROM lists WHERE id = $1"
-    query(list_sql, list_id)
-
     todos_sql = "DELETE FROM todos WHERE list_id = $1"
     query(todos_sql, list_id)
+
+    list_sql = "DELETE FROM lists WHERE id = $1"
+    query(list_sql, list_id)
   end
 
   def update_list_name(list_id, new_list_name)
     sql = "UPDATE lists SET name = $1 WHERE id = $2"
     query(sql, new_list_name, list_id)
+  end
+
+  def load_todos_by(list_id)
+    sql = "SELECT * FROM todos WHERE list_id = $1"
+    result = query(sql, list_id)
+
+    result.map do |tuple|
+      { id: tuple['id'].to_i,
+        name: tuple['name'],
+        completed: tuple['completed'] == 't' }
+    end
   end
 
   def create_new_todo(list_id, todo_name)
@@ -88,14 +109,10 @@ class DatabasePersistence
     db.exec_params(statement, params)
   end
 
-  def load_todos_by(list_id)
-    sql = "SELECT * FROM todos WHERE list_id = $1"
-    result = query(sql, list_id)
-
-    result.map do |tuple|
-      { id: tuple['id'].to_i,
-        name: tuple['name'],
-        completed: tuple['completed'] == 't' }
-    end
+  def convert_tuple_to_hash(tuple)
+    { id: tuple['id'].to_i,
+      name: tuple['name'],
+      todos_count: tuple['todos_count'].to_i,
+      todos_completed_count: tuple['todos_completed_count'].to_i }
   end
 end

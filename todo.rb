@@ -21,9 +21,7 @@ end
 
 helpers do
   def completed_todos(list)
-    todos = list[:todos]
-    completed_todos = todos.count { |todo| todo[:completed] }
-    "#{completed_todos} / #{todos.size}"
+    "#{list[:todos_completed_count]} / #{list[:todos_count]}"
   end
 
   def list_class(list)
@@ -31,8 +29,8 @@ helpers do
   end
 
   def list_complete?(list)
-    todos = list[:todos]
-    todos.all? { |todo| todo[:completed] } && todos.size > 0
+    list[:todos_count] > 0 &&
+      list[:todos_completed_count] == list[:todos_count]
   end
 
   def sort_lists(lists, &block)
@@ -63,8 +61,8 @@ def error_for_list_name(list_name)
 end
 
 def error_for_todo_name(todo_name, list_id)
-  list = @storage.load_list(list_id)
-  if list[:todos].any? { |todo| todo[:name] == todo_name }
+  todos = @storage.load_todos_by(list_id)
+  if todos.any? { |todo| todo[:name] == todo_name }
     "Todo name must be unique."
   elsif !(1..100).cover?(todo_name.size)
     "Todo name must be between 1 and 100 characters long."
@@ -111,7 +109,7 @@ get "/lists/:id" do
   @list = @storage.load_list(@list_id)
 
   unless @list.empty?
-    @todos = @list[:todos]
+    @todos = @storage.load_todos_by(@list_id)
     erb :list, layout: :layout
   else
     session[:error] = "List not found."
@@ -168,6 +166,8 @@ post "/lists/:list_id/todos" do
 
   error = error_for_todo_name(todo_name, @list_id)
   if error
+    @list = @storage.load_list(@list_id)
+    @todos = @storage.load_todos_by(@list_id)
     session[:error] = error
     erb :list, layout: :layout
   else
